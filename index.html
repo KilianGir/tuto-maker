@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Tuto maker</title>
+<title>Créateur de marches à suivre</title>
 <style>
   :root{
     --bg:#1c1f26;
@@ -220,9 +220,9 @@
 <div id="app">
 
   <header class="topbar">
-    <h1>Tuto maker</h1>
+    <h1>Créateur de marches à suivre</h1>
     <div class="spacer"></div>
-    <button class="btn" id="btnNewDoc" title="Nouveau tuto">Nouveau</button>
+    <button class="btn" id="btnNewDoc" title="Nouvelle marche à suivre">Nouveau</button>
     <button class="btn" id="btnLoadJson" title="Charger un fichier .json">Ouvrir .json</button>
     <input type="file" id="fileLoadJson" accept=".json" class="hidden-input">
     <button class="btn" id="btnSaveJson" title="Sauvegarder en .json">Sauvegarder .json</button>
@@ -1490,9 +1490,13 @@ async function exportToPdf(opts){
     }
 
     downloadPdf(pdfBytes, versionNumber, draft);
+    // Also save a .json snapshot of this exact version (state is already
+    // updated above for a real export). Slight delay so the browser doesn't
+    // collapse the two downloads into one.
+    setTimeout(()=> downloadProjectJson(versionNumber, draft), 400);
     PB.showToast(draft
-      ? `Aperçu exporté — brouillon v${versionNumber} (version non incrémentée)`
-      : `PDF exporté — version ${versionNumber}`);
+      ? `Aperçu v${versionNumber} (BROUILLON) — PDF + sauvegarde .json`
+      : `Version ${versionNumber} exportée — PDF + sauvegarde .json`);
 
   }catch(err){
     console.error(err);
@@ -1941,6 +1945,24 @@ function downloadPdf(bytes, versionNumber, draft){
   const suffix = draft ? `_v${versionNumber}_BROUILLON` : `_v${versionNumber}`;
   a.href = url;
   a.download = `${safeTitle || "marche_a_suivre"}${suffix}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url), 1500);
+}
+
+// Saves a .json snapshot of the project alongside the exported PDF, using the
+// same version suffix so the pair stays matched. Serializes the live state at
+// call time (already version-bumped for a real export, untouched for a draft).
+function downloadProjectJson(versionNumber, draft){
+  const json = PB.serializeProject();
+  const blob = new Blob([json], {type:"application/json"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const safeTitle = (PB.state.meta.title || "marche_a_suivre").replace(/[^a-z0-9_\-]+/gi,"_").slice(0,40);
+  const suffix = draft ? `_v${versionNumber}_BROUILLON` : `_v${versionNumber}`;
+  a.href = url;
+  a.download = `${safeTitle || "marche_a_suivre"}${suffix}.json`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
