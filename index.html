@@ -1731,17 +1731,57 @@ function drawWrappedText(ctx, text, opts){
   });
 }
 
+// Estimate the total vertical space a step needs (header + wrapped text +
+// image grid + trailing spacing), mirroring the math in drawStep/drawImagesGrid.
+// Used to decide whether to page-break before the step so it stays whole.
+function measureStepHeight(ctx, step, embeddedImages){
+  const maxWidth = PAGE_W - MARGIN*2;
+  let h = 28; // header: badge (18) + 10 gap
+
+  if(step.text){
+    const lines = wrapLines(step.text, ctx.fontRegular, 10, maxWidth);
+    h += lines.length * 13.5 + 6;
+  }
+
+  if(embeddedImages && embeddedImages.length){
+    const gap = 10;
+    const perRow = embeddedImages.length === 1 ? 1 : 2;
+    const cellW = perRow === 1 ? Math.min(maxWidth, 380) : (maxWidth - gap) / 2;
+    const maxCellH = 220;
+    for(let i=0;i<embeddedImages.length;i+=perRow){
+      const rowImgs = embeddedImages.slice(i, i+perRow);
+      let rowHeight = 0;
+      rowImgs.forEach(img=>{
+        const ratio = img.height / img.width;
+        let hh = cellW * ratio;
+        if(hh > maxCellH) hh = maxCellH;
+        if(hh > rowHeight) rowHeight = hh;
+      });
+      h += rowHeight + 10;
+    }
+  }
+
+  h += 16; // trailing spacing after the step (incl. separator line)
+  return h;
+}
+
 function drawStep(ctx, step, idx, embeddedImages){
   const { rgb } = window.PDFLib;
   const stepNumber = idx + 1;
   const title = step.title ? step.title : `Étape ${stepNumber}`;
-
-  // Estimate minimum height needed to start this step without an awkward
-  // orphaned title or split between text and its first image: header +
-  // a couple of text lines + (start of) first image row.
-  const estTextLines = step.text ? Math.min(3, Math.ceil(step.text.length / 90)) : 0;
-  const minBlockHeight = 30 + (estTextLines * 13.5) + (embeddedImages && embeddedImages.length ? 60 : 0);
-  ensureSpace(ctx, minBlockHeight);
+  // Keep the whole step together: if the title + description + images don't fit
+  // in the remaining space on this page, break BEFORE the title so instructions
+  // and their images never land on two different pages. If the step is taller
+  // than a full page (can't fit anywhere), fall back to just avoiding an
+  // orphaned header and let the content flow across pages.
+  const fullHeight = measureStepHeight(ctx, step, embeddedImages);
+  const pageContentHeight = CONTENT_TOP - CONTENT_BOTTOM;
+  if(fullHeight <= pageContentHeight){
+    ensureSpace(ctx, fullHeight);
+  } else {
+    const minBlockHeight = 30 + (embeddedImages && embeddedImages.length ? 60 : 0);
+    ensureSpace(ctx, minBlockHeight);
+  }
 
   // Step header (number badge + title), vertically centered on the same axis
   const badgeSize = 18;
