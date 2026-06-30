@@ -226,7 +226,8 @@
     <button class="btn" id="btnLoadJson" title="Charger un fichier .json">Ouvrir .json</button>
     <input type="file" id="fileLoadJson" accept=".json" class="hidden-input">
     <button class="btn" id="btnSaveJson" title="Sauvegarder en .json">Sauvegarder .json</button>
-    <button class="btn primary" id="btnExportPdf" title="Exporter en PDF">Exporter PDF</button>
+    <button class="btn" id="btnDraftPdf" title="Générer un PDF d'aperçu (BROUILLON) sans incrémenter la version">Aperçu PDF</button>
+    <button class="btn primary" id="btnExportPdf" title="Exporter en PDF (crée une nouvelle version)">Exporter PDF</button>
   </header>
 
   <main>
@@ -878,6 +879,9 @@ function initTopBar(){
   document.getElementById("btnExportPdf").addEventListener("click", ()=>{
     exportToPdf();
   });
+  document.getElementById("btnDraftPdf").addEventListener("click", ()=>{
+    exportToPdf({ draft: true });
+  });
 }
 
 /* ------------------------------ Init ------------------------------ */
@@ -1399,15 +1403,17 @@ const FOOTER_H = 30;
 const CONTENT_TOP = PAGE_H - HEADER_H - MARGIN;
 const CONTENT_BOTTOM = FOOTER_H + MARGIN * 0.6;
 
-async function exportToPdf(){
+async function exportToPdf(opts){
+  const draft = !!(opts && opts.draft);
+
   if(!state_hasContent()){
     if(!confirm("La marche à suivre est vide (pas de titre ni d'étapes). Exporter quand même ?")) return;
   }
 
-  PB.showToast("Génération du PDF en cours...");
+  PB.showToast(draft ? "Génération de l'aperçu (brouillon)..." : "Génération du PDF en cours...");
 
   try{
-    const { PDFDocument, rgb, StandardFonts } = window.PDFLib;
+    const { PDFDocument, rgb, StandardFonts, degrees } = window.PDFLib;
     const pdfDoc = await PDFDocument.create();
     const fontRegular = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
@@ -1442,7 +1448,7 @@ async function exportToPdf(){
     const ctx = {
       pdfDoc, fontRegular, fontBold, fontItalic,
       page: null, y: 0, pageNum: 0,
-      versionNumber, nowStr
+      versionNumber, nowStr, draft
     };
 
     newPage(ctx);
@@ -1471,18 +1477,22 @@ async function exportToPdf(){
 
     const pdfBytes = await pdfDoc.save();
 
-    // record version history
-    PB.state.version.number = versionNumber;
-    PB.state.version.history.push({
-      number: versionNumber,
-      date: nowStr,
-      notes: PB.state.version.notes || ""
-    });
-    PB.state.version.notes = ""; // clear for next round
-    PB.renderVersionHistory();
+    if(!draft){
+      // record version history (only for a real export)
+      PB.state.version.number = versionNumber;
+      PB.state.version.history.push({
+        number: versionNumber,
+        date: nowStr,
+        notes: PB.state.version.notes || ""
+      });
+      PB.state.version.notes = ""; // clear for next round
+      PB.renderVersionHistory();
+    }
 
-    downloadPdf(pdfBytes, versionNumber);
-    PB.showToast(`PDF exporté — version ${versionNumber}`);
+    downloadPdf(pdfBytes, versionNumber, draft);
+    PB.showToast(draft
+      ? `Aperçu exporté — brouillon v${versionNumber} (version non incrémentée)`
+      : `PDF exporté — version ${versionNumber}`);
 
   }catch(err){
     console.error(err);
@@ -1531,8 +1541,27 @@ function finalizeHeadersFooters(ctx){
   const { rgb } = window.PDFLib;
   const total = ctx.pageRefs.length;
   ctx.pageRefs.forEach((page, i) => {
+    if(ctx.draft) drawDraftWatermark(ctx, page);
     drawHeader(ctx, page);
     drawFooter(ctx, page, i+1, total);
+  });
+}
+
+// Light diagonal "BROUILLON" stamp, drawn over the content but pale enough
+// to stay perfectly readable. Signals at a glance that the PDF isn't official.
+function drawDraftWatermark(ctx, page){
+  const { rgb, degrees } = window.PDFLib;
+  const text = "BROUILLON";
+  const size = 72;
+  const w = ctx.fontBold.widthOfTextAtSize(text, size);
+  // place so the rotated text runs roughly through the page centre
+  const cx = PAGE_W/2, cy = PAGE_H/2;
+  page.drawText(text, {
+    x: cx - (w/2)*Math.cos(Math.PI/4),
+    y: cy - (w/2)*Math.sin(Math.PI/4),
+    size, font: ctx.fontBold,
+    color: rgb(0.92,0.92,0.94),
+    rotate: degrees(45)
   });
 }
 
@@ -1564,6 +1593,15 @@ function drawHeader(ctx, page){
   page.drawText(dateText, {
     x: PAGE_W - MARGIN - dateWidth, y: top - 28, size: 8.5, font: ctx.fontRegular, color: rgb(0.45,0.45,0.5)
   });
+
+  // Draft marker next to the version badge
+  if(ctx.draft){
+    const dText = "BROUILLON";
+    const dWidth = ctx.fontBold.widthOfTextAtSize(dText, 9);
+    page.drawText(dText, {
+      x: PAGE_W - MARGIN - dWidth, y: top - 40, size: 9, font: ctx.fontBold, color: rgb(0.85,0.33,0.1)
+    });
+  }
 
   // separator line — placed clearly below the header texts
   page.drawLine({
@@ -1895,13 +1933,14 @@ function drawImagesGrid(ctx, embeddedImages){
 
 /* ------------------------------- Download ------------------------------------- */
 
-function downloadPdf(bytes, versionNumber){
+function downloadPdf(bytes, versionNumber, draft){
   const blob = new Blob([bytes], {type:"application/pdf"});
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   const safeTitle = (PB.state.meta.title || "marche_a_suivre").replace(/[^a-z0-9_\-]+/gi,"_").slice(0,40);
+  const suffix = draft ? `_v${versionNumber}_BROUILLON` : `_v${versionNumber}`;
   a.href = url;
-  a.download = `${safeTitle || "marche_a_suivre"}_v${versionNumber}.pdf`;
+  a.download = `${safeTitle || "marche_a_suivre"}${suffix}.pdf`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
